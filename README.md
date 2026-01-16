@@ -1,3 +1,9 @@
 # Utilizing-LLM-s-self-supervised-labeling-of-videos
 Leveraging Large Language Models for Cascaded Refinement of Video Annotation: Combining Small-Batch Precise Labeling with Large-Scale Coarse Labeling to Train Models for Full-Scale Accurate Prediction, Thereby Significantly Reducing Annotation Costs.
-****testing****
+
+## Requirements
+- python 3.10
+
+```bash
+    conda install pytorch torchvision torchaudio pytorch-cuda=12.1 -c pytorch -c nvidia
+    pip install -r requirements.txt
