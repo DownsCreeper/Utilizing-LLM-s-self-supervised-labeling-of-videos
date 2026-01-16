@@ -277,7 +277,6 @@ class BatchImageProcessor:
         
         for ext in image_extensions:
             image_files.extend(Path(folder_path).glob(f"*{ext}"))
-            image_files.extend(Path(folder_path).glob(f"*{ext.upper()}"))
         
         image_files = sorted([str(f) for f in image_files])
         total_images = len(image_files)
