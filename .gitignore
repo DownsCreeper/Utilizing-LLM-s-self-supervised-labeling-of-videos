@@ -205,3 +205,39 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+# ===== Python =====
+__pycache__/
+*.py[cod]
+*.so
+
+# ===== Conda / venv =====
+venv/
+.env
+.venv/
+conda-env/
+
+# ===== PyTorch / DL =====
+*.pt
+*.pth
+*.ckpt
+runs/
+logs/
+outputs/
+checkpoints/
+
+# ===== Dataset (千万别传) =====
+data/
+dataset/
+datasets/
+
+# ===== VS Code =====
+.vscode/
+*.code-workspace
+
+# ===== Jupyter =====
+.ipynb_checkpoints/
+
+# ===== OS =====
+.DS_Store
+Thumbs.db
