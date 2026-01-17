@@ -7,13 +7,17 @@
 """
 
 import os
+import sys
 import json
 import random
 import argparse
-import subprocess
 from pathlib import Path
 from typing import List, Tuple, Dict
 from datetime import datetime
+
+# 添加 api 目录到路径
+sys.path.insert(0, str(Path(__file__).parent.parent / "api"))
+from doubao_image_api import DoubaoImageUnderstandingAPI, BatchImageProcessor
 
 
 class VideoBatchProcessor:
@@ -119,45 +123,73 @@ class VideoBatchProcessor:
     
     def process_video(self, video_id: str, annotation_type: str = "fine") -> bool:
         """处理单个视频"""
+        print(f"\n{'='*70}")
+        print(f"  处理视频: {video_id} [{annotation_type.upper()}]")
+        print(f"{'='*70}")
+        
         video_dir = self.dataset_dir / video_id
         groups_file = video_dir / "groups_of_five.json"
         
+        # 检查 groups_of_five.json
+        print(f"  [1/4] 检查分组文件...", end=" ")
         if not groups_file.exists():
-            print(f"  ✗ 缺少 groups_of_five.json，跳过")
+            print("✗ 缺少 groups_of_five.json")
             return False
+        print("✓")
         
+        # 检查是否已处理
         output_file = video_dir / f"doubao_results_{video_id}.json"
+        print(f"  [2/4] 检查输出文件...", end=" ")
         if output_file.exists():
-            print(f"  ⊘ 已处理，跳过")
+            print("⊘ 已存在，跳过处理")
             return True
+        print("✓ 需要处理")
         
-        cmd = [
-            "python",
-            str(Path(__file__).parent.parent / "api" / "doubao_image_api.py"),
-            "--dataset-name", self.dataset_name,
-            "--sample-interval", str(self.sample_interval),
-            "--video-id", video_id,
-            "--base-dir", str(self.dataset_dir.parent.parent)
-        ]
+        # 准备参数
+        print(f"  [3/4] 准备调用 API...")
         
+        # 设置提示词
         if annotation_type == "coarse":
-            # 粗略标注：只标注动作，不标注人物、物体、环境
-            coarse_prompt = "请识别这张拼接图片中主体人物的动作，只需要返回动作名称。格式：{动作：XXX}。例如：{动作：切菜}、{动作：倒水}、{动作：搅拌}、{动作：站立}等。"
-            cmd.extend(["--prompt", coarse_prompt])
+            # 粗略标注：只标注动作
+            prompt = "请识别这张拼接图片中主体人物的动作，只需要返回动作名称，返回JSON格式。格式：{动作：XXX}。例如：{动作：切菜}、{动作：倒水}、{动作：搅拌}、{动作：站立}等。标签简洁，不要加括号，单行回复，即只用描述一个人物的动作，用中文键。若只是站立无动作，输出{still}。"
+            print(f"        标注类型: 粗略（仅动作）")
+        else:
+            # 精细标注：完整四字段
+            prompt = "请结构化识别这张拼接图片中的主体人物动作，返回JSON格式。格式为\"{人物，动作，物体，环境}\"，如{人物：男人，动作：切，物体：菜，环境：厨房}。标签简洁，不要加括号，单行回复，即只用描述一个人物的动作，用中文键。若只是站立无动作，输出{still}。"
+            print(f"        标注类型: 精细（人物+动作+物体+环境）")
+        
+        print(f"  [4/4] 执行 API 调用...")
+        print(f"        {'-'*66}")
         
         try:
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=3600)
-            if result.returncode == 0:
-                print(f"  ✓ 处理成功")
-                return True
-            else:
-                print(f"  ✗ 处理失败: {result.stderr[:100]}")
-                return False
-        except subprocess.TimeoutExpired:
-            print(f"  ✗ 超时（>1小时）")
-            return False
+            # 初始化 API 客户端
+            api_key = "241d5b8f-6403-46ec-8c25-7fcb4eb4e489"
+            model = "ep-20260116222301-2pdc2"
+            base_url = "https://ark.cn-beijing.volces.com/api/v3"
+            
+            api_client = DoubaoImageUnderstandingAPI(api_key, model, base_url)
+            processor = BatchImageProcessor(api_client)
+            
+            # 处理文件夹
+            results = processor.process_folder(
+                str(video_dir),
+                prompt,
+                output_file=str(output_file),
+                temperature=0.5,
+                max_tokens=2048,
+                delay=1.0
+            )
+            
+            print(f"        {'-'*66}")
+            print(f"  ✓ 视频 {video_id} 处理成功")
+            print(f"  ✓ 共 {len(results)} 条标准化记录")
+            return True
+                
         except Exception as e:
-            print(f"  ✗ 异常: {str(e)}")
+            print(f"        {'-'*66}")
+            print(f"  ✗ 处理异常: {str(e)}")
+            import traceback
+            traceback.print_exc()
             return False
     
     def process_batch(self, fine_grained: List[str], coarse_grained: List[str], dry_run: bool = False) -> None:
@@ -170,45 +202,68 @@ class VideoBatchProcessor:
         failed = 0
         
         print("\n" + "=" * 70)
-        print(f"批量处理: 精细标注 {len(fine_grained)} 个 + 粗略标注 {len(coarse_grained)} 个 = 总计 {total} 个")
+        print("批量处理开始".center(70))
+        print("=" * 70)
+        print(f"  精细标注: {len(fine_grained)} 个")
+        print(f"  粗略标注: {len(coarse_grained)} 个")
+        print(f"  总计: {total} 个")
         print("=" * 70)
         
         if dry_run:
-            print("[干运行模式] 只显示计划，不实际处理\n")
+            print("\n[干运行模式] 只显示计划，不实际处理\n")
         
         # 精细标注
-        for i, vid in enumerate(fine_grained, 1):
-            print(f"[{i}/{len(fine_grained)}] 精细标注: {vid}", end=" ")
-            if dry_run:
-                print("(DRY RUN)")
-                processed += 1
-            else:
-                if self.process_video(vid, "fine"):
+        if fine_grained:
+            print(f"\n{'#'*70}")
+            print(f"  开始处理精细标注视频 ({len(fine_grained)} 个)")
+            print(f"{'#'*70}")
+            
+            for i, vid in enumerate(fine_grained, 1):
+                print(f"\n>>> 进度: [{i}/{len(fine_grained)}] 精细标注")
+                if dry_run:
+                    print(f"    [DRY RUN] 视频 {vid} - 将使用标准提示词")
                     processed += 1
-                    progress["fine_grained"]["completed"].append(vid)
                 else:
-                    failed += 1
-                    progress["fine_grained"]["failed"].append(vid)
-                self.save_progress(progress)
+                    if self.process_video(vid, "fine"):
+                        processed += 1
+                        progress["fine_grained"]["completed"].append(vid)
+                    else:
+                        failed += 1
+                        progress["fine_grained"]["failed"].append(vid)
+                    self.save_progress(progress)
         
         # 粗略标注
-        for i, vid in enumerate(coarse_grained, 1):
-            print(f"[{i}/{len(coarse_grained)}] 粗略标注: {vid}", end=" ")
-            if dry_run:
-                print("(DRY RUN)")
-                processed += 1
-            else:
-                if self.process_video(vid, "coarse"):
+        if coarse_grained:
+            print(f"\n{'#'*70}")
+            print(f"  开始处理粗略标注视频 ({len(coarse_grained)} 个)")
+            print(f"{'#'*70}")
+            
+            for i, vid in enumerate(coarse_grained, 1):
+                print(f"\n>>> 进度: [{i}/{len(coarse_grained)}] 粗略标注")
+                if dry_run:
+                    print(f"    [DRY RUN] 视频 {vid} - 将使用简化提示词")
                     processed += 1
-                    progress["coarse_grained"]["completed"].append(vid)
                 else:
-                    failed += 1
-                    progress["coarse_grained"]["failed"].append(vid)
-                self.save_progress(progress)
+                    if self.process_video(vid, "coarse"):
+                        processed += 1
+                        progress["coarse_grained"]["completed"].append(vid)
+                    else:
+                        failed += 1
+                        progress["coarse_grained"]["failed"].append(vid)
+                    self.save_progress(progress)
         
+        # 总结
         print("\n" + "=" * 70)
-        print(f"处理完成: 成功 {processed} 个, 失败 {failed} 个, 成功率 {processed/total*100:.1f}%")
+        print("批量处理完成".center(70))
         print("=" * 70)
+        print(f"  总计视频: {total} 个")
+        print(f"  成功处理: {processed} 个  ✓")
+        print(f"  处理失败: {failed} 个  ✗")
+        if total > 0:
+            success_rate = processed/total*100
+            status = "优秀" if success_rate >= 90 else "良好" if success_rate >= 70 else "一般"
+            print(f"  成功率: {success_rate:.1f}% ({status})")
+        print("=" * 70 + "\n")
 
 
 def main():
