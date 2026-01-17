@@ -342,7 +342,7 @@ class BatchImageProcessor:
                      image_list: List[str],
                      prompt: str,
                      output_file: str = None,
-                     delay: float = 1.0,
+                     delay: float = 0.01,
                      **kwargs) -> List[Dict[str, Any]]:
         """
         处理图片列表
