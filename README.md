@@ -53,5 +53,5 @@ python api/doubao_image_api.py
 ### 批量视频
 ```bash
 # 自定义比例（10% 精细）
-python batch_process_videos.py --dataset-dir "D:\ULLV\Utilizing-LLM-s-self-supervised-labeling-of-videos\dataset\breakfast\breakfast_5" --dataset-name breakfast --fine-ratio 0.1
+python tool/batch_process_videos.py --dataset-dir "D:\ULLV\Utilizing-LLM-s-self-supervised-labeling-of-videos\dataset\breakfast\breakfast_5" --dataset-name breakfast --fine-ratio 0.1
 ```

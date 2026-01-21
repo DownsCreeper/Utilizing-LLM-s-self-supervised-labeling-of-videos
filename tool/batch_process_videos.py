@@ -18,6 +18,7 @@ from datetime import datetime
 # 添加 api 目录到路径
 sys.path.insert(0, str(Path(__file__).parent.parent / "api"))
 from doubao_image_api import DoubaoImageUnderstandingAPI, BatchImageProcessor
+from standardize_response import parse_dict_format
 
 
 class VideoBatchProcessor:
@@ -33,6 +34,110 @@ class VideoBatchProcessor:
         
         self.split_file = self.dataset_dir / f"{dataset_name}_split_info.txt"
         self.progress_file = self.dataset_dir / f"{dataset_name}_progress.json"
+        self.vocab_file = self.dataset_dir / f"{dataset_name}_vocab.json"
+
+    def load_vocab(self) -> Dict[str, List[str]]:
+        """加载或初始化词典（英文值）"""
+        default_vocab = {
+            "person": [],
+            "action": ["still"],
+            "object": [],
+            "environment": []
+        }
+        if self.vocab_file.exists():
+            try:
+                with open(self.vocab_file, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                # 确保四个键都存在
+                for k in default_vocab:
+                    data.setdefault(k, [])
+                return data
+            except Exception:
+                return default_vocab
+        else:
+            return default_vocab
+
+    def save_vocab(self, vocab: Dict[str, List[str]]) -> None:
+        """保存词典到文件"""
+        try:
+            with open(self.vocab_file, 'w', encoding='utf-8') as f:
+                json.dump(vocab, f, ensure_ascii=False, indent=2)
+            print(f"✓ 词典已更新: {self.vocab_file}")
+        except Exception as e:
+            print(f"警告：词典保存失败 - {str(e)}")
+
+    def build_prompt(self, annotation_type: str, vocab: Dict[str, List[str]]) -> str:
+        """基于注释类型与词典构建提示词（英文键/值）"""
+        # 将列表转成逗号分隔的简短文本
+        def join(lst: List[str]) -> str:
+            if not lst:
+                return "(empty)"
+            # 控制长度，避免提示词过长
+            return ", ".join(sorted(set(lst)))
+
+        if annotation_type == "coarse":
+            return (
+                "Identify the main person's action in this stitched image. "
+                "Prefer the base/core verb from the existing action vocabulary; avoid synonyms that only change tense (e.g., pour not pouring). "
+                "If none fits, generate one concise base-form verb (lemma) and output it. Do not return empty/blank/empty string. "
+                "Return JSON with English key/value: {action: XXX}. ONE action, ONE word, NO phrases, NO multiple values. "
+                "Lowercase, no brackets, single-line response. If unsure, give your best guess; if truly unknown, use 'unknown' instead of empty. If standing still, use {action: still}. "
+                "Deduplicate choices: if a synonym already exists (e.g., pour vs pouring), pick the existing base form. "
+                f"Action vocabulary: [{join(vocab.get('action', []))}]"
+            )
+        else:
+            return (
+                "Perform structured action recognition for the main person in this stitched image. "
+                "Prefer base/core labels from the existing vocabulary; avoid tense/inflection synonyms (e.g., pour not pouring). "
+                "If none fits, generate concise new single-word labels in base form. Do not leave any field empty/blank; if truly unknown, use 'unknown' instead of empty. "
+                "Return JSON using English keys and English single-word values: {person: XXX, action: XXX, object: XXX, environment: XXX}. "
+                "ONE value per key, ONE word each, NO phrases, NO multiple values, lowercase, no brackets, single-line response. Provide your best guess based on the image. "
+                "If the person is standing still, set action: still. Deduplicate choices by picking existing base forms when synonyms appear. "
+                f"Person vocabulary: [{join(vocab.get('person', []))}] "
+                f"Action vocabulary: [{join(vocab.get('action', []))}] "
+                f"Object vocabulary: [{join(vocab.get('object', []))}] "
+                f"Environment vocabulary: [{join(vocab.get('environment', []))}]"
+            )
+
+    def update_vocab_from_results(self, vocab: Dict[str, List[str]], results: List[str], annotation_type: str) -> Tuple[Dict[str, List[str]], Dict[str, List[str]]]:
+        """根据标准化结果更新词典；返回(更新后的词典, 新增项字典)"""
+        added: Dict[str, List[str]] = {"person": [], "action": [], "object": [], "environment": []}
+
+        # 标准化结果是字符串，需要解析为字典
+        for resp in results:
+            try:
+                data = parse_dict_format(resp)
+            except Exception:
+                data = {}
+
+            # 中文键映射到英文键
+            cn_to_en = {
+                "人物": "person",
+                "动作": "action",
+                "物体": "object",
+                "环境": "environment",
+                # 兼容英文键
+                "person": "person",
+                "action": "action",
+                "object": "object",
+                "environment": "environment",
+            }
+
+            for cn_key, en_key in cn_to_en.items():
+                if cn_key in data:
+                    val = str(data.get(cn_key, '')).strip()
+                    if not val:
+                        continue
+                    # 粗略标注仅关注 action
+                    if annotation_type == "coarse" and en_key != "action":
+                        continue
+                    # 加入词典（英文值）
+                    lst = vocab.setdefault(en_key, [])
+                    if val not in lst:
+                        lst.append(val)
+                        added[en_key].append(val)
+
+        return vocab, added
     
     def scan_videos(self) -> List[str]:
         """扫描数据集中的所有视频目录"""
@@ -148,15 +253,13 @@ class VideoBatchProcessor:
         # 准备参数
         print(f"  [3/4] 准备调用 API...")
         
-        # 设置提示词
+        # 加载词典并构造提示词
+        vocab = self.load_vocab()
         if annotation_type == "coarse":
-            # 粗略标注：只标注动作
-            prompt = "请识别这张拼接图片中主体人物的动作，只需要返回动作名称，返回JSON格式。格式：{动作：XXX}。例如：{动作：切菜}、{动作：倒水}、{动作：搅拌}、{动作：站立}等。标签简洁，不要加括号，单行回复，即只用描述一个人物的动作，用中文键。若只是站立无动作，输出{still}。"
-            print(f"        标注类型: 粗略（仅动作）")
+            print(f"        标注类型: 粗略（仅动作，优先使用词典）")
         else:
-            # 精细标注：完整四字段
-            prompt = "请结构化识别这张拼接图片中的主体人物动作，返回JSON格式。格式为\"{人物，动作，物体，环境}\"，如{人物：男人，动作：切，物体：菜，环境：厨房}。标签简洁，不要加括号，单行回复，即只用描述一个人物的动作，用中文键。若只是站立无动作，输出{still}。"
-            print(f"        标注类型: 精细（人物+动作+物体+环境）")
+            print(f"        标注类型: 精细（人物+动作+物体+环境，优先使用词典）")
+        prompt = self.build_prompt(annotation_type, vocab)
         
         print(f"  [4/4] 执行 API 调用...")
         print(f"        {'-'*66}")
@@ -183,6 +286,15 @@ class VideoBatchProcessor:
             print(f"        {'-'*66}")
             print(f"  ✓ 视频 {video_id} 处理成功")
             print(f"  ✓ 共 {len(results)} 条标准化记录")
+            # 根据结果更新词典
+            updated_vocab, added = self.update_vocab_from_results(vocab, results, annotation_type)
+            # 仅在有新增时保存
+            if any(added[k] for k in added):
+                self.save_vocab(updated_vocab)
+                print("  ✓ 新增词条:")
+                for k in ("person", "action", "object", "environment"):
+                    if added[k]:
+                        print(f"    - {k}: {', '.join(sorted(set(added[k])))}")
             return True
                 
         except Exception as e:

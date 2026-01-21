@@ -1,13 +1,13 @@
 """
 标准化 Doubao LLM 回复的工具
 
-将各种格式的 LLM 回复（JSON、中文冒号、包含括号等）标准化为统一格式：
-  "{人物：xxx，动作：xxx，物体：xxx，环境：xxx}"
+将各种格式的 LLM 回复（JSON、中文冒号、包含括号等）标准化为统一格式，输出英文字段：
+    "{person: xxx, action: xxx, object: xxx, environment: xxx}"
 
 标准化规则：
 1. 删除所有括号及其内容（例如 "拿（含伸臂、持瓶、持袋）" → "拿"）
 2. 移除所有 \n 换行符和多余空白
-3. 统一为中文冒号和逗号分隔符
+3. 统一为英文冒号和逗号分隔符
 4. 保存为纯字符串（无 \" 转义）
 """
 
@@ -45,38 +45,38 @@ def normalize_whitespace(text: str) -> str:
 
 def parse_dict_format(text: str) -> Dict[str, str]:
     """
-    解析不同格式的字典文本
-    
+    解析不同格式的字典文本，允许中英文键。
+
     支持的格式：
-      - JSON: {"人物":"男人","动作":"取"}
+      - JSON: {"人物":"男人","动作":"取"} 或 {"action":"cut"}
       - 中文冒号: {人物：男人，动作：取}
       - 带引号: {"人物":"男人","动作":"取"}
-      - 纯字符串: 人物：男人，动作：取
+      - 纯字符串: 人物：男人，动作：取 或 action: cut
     """
     # 删除引号转义
-    text = text.replace('\\"', '"')
+    text = text.replace('\"', '"')
     # 标准化空白
     text = normalize_whitespace(text)
-    
+
     # 尝试 JSON 解析
     try:
         # 移除前后的花括号
         text_stripped = text.strip('{}').strip()
-        
+
         # 如果包含 " 或 ':
         if '"' in text or '":' in text:
             # 尝试直接 JSON 解析
             try:
                 return json.loads(text)
-            except:
+            except Exception:
                 pass
-        
+
         # 尝试用中文冒号解析：{人物：xxx，动作：xxx}
         if '：' in text or '，' in text:
             result = {}
             # 移除引号
             text_stripped = text.strip('{}').strip('"\'')
-            
+
             # 按逗号分割（支持中文和英文逗号）
             pairs = re.split('[,，]', text_stripped)
             for pair in pairs:
@@ -91,32 +91,32 @@ def parse_dict_format(text: str) -> Dict[str, str]:
                     key = key.strip().strip('"\'')
                     value = value.strip().strip('"\'')
                     result[key] = value
-            
+
             if result:
                 return result
-    
+
     except Exception as e:
         print(f"警告：解析失败 - {text[:50]}... - {str(e)}")
-    
+
     return {}
 
 
 def standardize_response(response: Union[str, Dict, Any]) -> str:
     """
     将 LLM 回复标准化为统一格式
-    
+
     输入：
       - 字符串（可能是 JSON、纯文本等）
       - 字典
-    
+
     输出：
-      "{人物：xxx，动作：xxx，物体：xxx，环境：xxx}"
-    
+      "{person: xxx, action: xxx, object: xxx, environment: xxx}"
+
     示例：
       输入：'{"人物":"男人","动作":"拿（含伸臂、持瓶、持袋）","物体":"瓶子、袋子","环境":"厨房"}'
-      输出："{人物：男人，动作：拿，物体：瓶子、袋子，环境：厨房}"
+      输出："{person: 男人, action: 拿, object: 瓶子、袋子, environment: 厨房}"
     """
-    
+
     # 1. 转换为字典
     if isinstance(response, str):
         data = parse_dict_format(response)
@@ -124,48 +124,45 @@ def standardize_response(response: Union[str, Dict, Any]) -> str:
         data = response
     else:
         return ""
-    
-    # 2. 标准化各字段
-    # 定义标准字段（中文键）
+
+    # 2. 标准化各字段（输出使用英文键，允许中英文输入键）
     standard_keys = {
-        '人物': ['character', 'person', '人物'],
-        '动作': ['action', 'motion', '动作'],
-        '物体': ['object', 'thing', '物体'],
-        '环境': ['environment', 'scene', '环境']
+        'person': ['person', 'character', '人物'],
+        'action': ['action', 'motion', '动作'],
+        'object': ['object', 'thing', '物体'],
+        'environment': ['environment', 'scene', '环境']
     }
-    
-    # 归一化键名和值
-    normalized = {}
-    for cn_key, variants in standard_keys.items():
+
+    normalized: Dict[str, str] = {}
+    for en_key, variants in standard_keys.items():
         for variant in variants:
             if variant in data:
                 value = str(data[variant]).strip()
-                
+
                 # 删除括号内容
                 value = remove_parentheses_content(value)
-                
+
                 # 删除不必要的引号
-                value = value.strip('\"\'').strip()
-                
+                value = value.strip('"\'').strip()
+
                 # 删除所有 \n 和多余空白
                 value = normalize_whitespace(value)
-                
-                normalized[cn_key] = value
+
+                normalized[en_key] = value
                 break
-        
+
         # 如果找不到该字段，使用默认值
-        if cn_key not in normalized:
-            normalized[cn_key] = ""
-    
-    # 3. 格式化输出
-    # 按顺序拼接：人物，动作，物体，环境
+        if en_key not in normalized:
+            normalized[en_key] = ""
+
+    # 3. 格式化输出（英文键）
     result = "{"
-    result += "人物：" + normalized.get('人物', '')
-    result += "，动作：" + normalized.get('动作', '')
-    result += "，物体：" + normalized.get('物体', '')
-    result += "，环境：" + normalized.get('环境', '')
+    result += "person: " + normalized.get('person', '')
+    result += ", action: " + normalized.get('action', '')
+    result += ", object: " + normalized.get('object', '')
+    result += ", environment: " + normalized.get('environment', '')
     result += "}"
-    
+
     return result
 
 
