@@ -3,7 +3,7 @@ import json
 import math
 import re
 from pathlib import Path
-from typing import Dict, Iterable, List, Tuple
+from typing import Dict, Iterable, List, Optional, Tuple
 
 # Minimal parser for strings shaped like "{person: man, action: pour, object: cup, environment: kitchen}".
 # The upstream JSON stores each frame's label as a string rather than a JSON object.
@@ -39,6 +39,15 @@ def _collect_frames_count(frames_dir: Path) -> int:
     return count
 
 
+def _is_empty_label(label: Dict[str, str]) -> bool:
+    """Check if a label contains only whitespace or meaningless content."""
+    for key in ["person", "action", "object", "environment"]:
+        value = label.get(key, "").strip()
+        if value and value not in ["", "unknown", "still"]:
+            return False
+    return True
+
+
 def _group_segments(labels: List[Dict[str, str]]) -> List[Tuple[int, int, Dict[str, str]]]:
     if not labels:
         return []
@@ -67,10 +76,12 @@ def convert(input_json: Path, frames_dir: Path, bins: int = 100) -> List[str]:
     segments = _group_segments(parsed_labels)
     output_lines: List[str] = []
     for f_start, f_end, label in segments:
+        if _is_empty_label(label):
+            continue
         t_start = _bin_index(f_start, total_frames, bins)
         t_end = _bin_index(f_end, total_frames, bins)
         output_lines.append(
-            f"{t_start} {t_end} {label['person']} {label['action']} {label['object']} {label['environment']}."
+            f"<{t_start}> <{t_end}> {label['person']} {label['action']} {label['object']} {label['environment']}."
         )
     return output_lines
 
@@ -82,9 +93,9 @@ def _default_video_id(path: Path) -> str:
 
 def convert_file(
     input_json: Path,
-    frames_dir: Path | None = None,
+    frames_dir: Optional[Path] = None,
     bins: int = 100,
-    video_id: str | None = None,
+    video_id: Optional[str] = None,
     overwrite: bool = False,
 ) -> Path:
     frames_dir = frames_dir or input_json.parent
